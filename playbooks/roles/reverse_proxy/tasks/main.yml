@@ -1,0 +1,96 @@
+---
+# Add tasks to generate and configure an SSL certificate and a private key here
+# Add tasks to configure nginx as a reverse proxy here
+# Add vhosts and other necessary files in the files/ and/or templates/ directories as appropriate
+# Use handlers to restart nginx if necessary
+
+- name: Generate a private key
+  become: true
+  ansible.builtin.openssl_privatekey:
+    path: /etc/ssl/certs/ansiblePriv.key       
+    size: 2048                      
+    state: present       
+
+- name: Generate a self-signed certificate and private key
+  become: true
+  ansible.builtin.openssl_certificate:
+    path: /etc/ssl/certs/ansibleCert.crt
+    privatekey_path: /etc/ssl/certs/ansiblePriv.key
+    provider: selfsigned
+    state: present
+    selfsigned_not_after: "+365d"
+    selfsigned_not_before: "+0s"
+    selfsigned_version: 3
+    selfsigned_digest: sha256
+    selfsigned_create_subject_key_identifier: create_if_not_provided  
+
+- name: Creating a php
+  become: true
+  file:
+    path: /etc/nginx/sites-available/ansible_php
+    state: touch
+
+- name: Create Nginx configuration file
+  become: true
+  blockinfile:
+    dest: /etc/nginx/sites-available/ansible_php
+    block: |
+      server {
+          listen 80;
+          server_name localhost;  # Replace with your actual domain or IP
+
+          location / {
+              proxy_pass http://127.0.0.1:8080;  # Ensure this points to your PHP backend
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+          }
+      }
+
+      server {
+          listen 443 ssl;  # HTTPS server
+          server_name localhost;  # Replace with your actual domain
+
+          ssl_certificate /etc/ssl/certs/ansibleCert.crt;  # Your SSL certificate path
+          ssl_certificate_key /etc/ssl/certs/ansiblePriv.key;  # Your SSL private key path
+
+          location / {
+              proxy_pass http://127.0.0.1:8080;  # Ensure this points to your PHP backend
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+          }
+      }
+
+      server {
+          listen 80;
+          server_name localhost;  # Replace with your actual domain
+          return 301 https://$server_name$request_uri;  # Redirect all HTTP requests to HTTPS
+      }
+    state: present
+  notify: restart nginx
+
+- name: Replace MySQL connection line
+  become: true
+  replace:
+    path: /repo/webroot/index.php
+    regexp: '\$link = mysqli_connect\("mysql", "root", "tiger", null\);'
+    replace: '$link = mysqli_connect("lubna_db", "lubna", "lubna1307", null);'
+
+- name: Enable Nginx configuration
+  become: true
+  file:
+    src: /etc/nginx/sites-available/ansible_php
+    dest: /etc/nginx/sites-enabled/ansible_php
+    state: link
+    force: yes
+  notify: restart nginx
+
+- name: Ensure NGINX is running and enabled
+  become: true
+  service:
+    name: nginx
+    state: started
+    enabled: yes
